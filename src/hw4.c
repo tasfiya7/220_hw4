@@ -78,26 +78,34 @@ int main() {
     setup_server();
     accept_connections();
 
-    // Main game loop to handle packets and alternate turns
     int current_turn = 1; // Start with Player 1
     char buffer[BUFFER_SIZE] = {0};
+
+    // Main game loop to handle packets
     while (1) {
         int conn_fd = (current_turn == 1) ? conn1_fd : conn2_fd;
+        
+        // Clear buffer and read incoming packet
         memset(buffer, 0, BUFFER_SIZE);
         int nbytes = read(conn_fd, buffer, BUFFER_SIZE);
+        
         if (nbytes <= 0) {
-            perror("[Server] read failed");
+            perror("[Server] Read failed or client disconnected.");
             break;
         }
+
+        printf("[Server] Received packet from Player %d: %s\n", current_turn, buffer);
+        
+        // Parse and handle packet based on type and check for errors
         parse_packet(conn_fd, buffer, current_turn);
 
-        // Alternate turns after a valid shoot or forfeit packet
+        // If the packet was Shoot or Forfeit, switch turns
         if (buffer[0] == PACKET_SHOOT || buffer[0] == PACKET_FORFEIT) {
             current_turn = (current_turn == 1) ? 2 : 1;
         }
     }
 
-    // Clean up
+    // Cleanup after the game loop ends
     for (int i = 0; i < game_board.height; i++) {
         free(game_board.cells[i]);
         free(player1_state.guesses[i]);
@@ -111,6 +119,7 @@ int main() {
     close(conn2_fd);
     return 0;
 }
+
 
 void setup_server() {
     struct sockaddr_in address1, address2;
@@ -186,52 +195,60 @@ void parse_packet(int conn_fd, char *buffer, int player) {
 }
 
 void handle_begin(int conn_fd, char *packet, int player) {
+    printf("[DEBUG] Entering handle_begin. Packet received: '%s'\n", packet);
+    
     if (player == 1) {
         int width, height;
-        
-        // Check for correct format and values in Player 1's Begin packet
-        if (sscanf(packet, "B %d %d", &width, &height) != 2 || width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
-            send_response(conn_fd, "E 200"); // Send error if parameters are invalid or out of range
+
+        // Check if the packet is in the correct format and has valid dimensions
+        if (sscanf(packet, "B %d %d", &width, &height) != 2) {
+            printf("[DEBUG] Invalid format for Begin packet from Player 1. Expected two integers after 'B'.\n");
+            send_response(conn_fd, "E 200");
             return;
         }
-        
-        // Initialize the game board and player states if parameters are valid
+
+        // Validate width and height
+        if (width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
+            printf("[DEBUG] Begin packet parameters out of range. Width: %d, Height: %d\n", width, height);
+            send_response(conn_fd, "E 200");
+            return;
+        }
+
+        // Initialize game board and player states if the packet is valid
+        printf("[DEBUG] Valid Begin packet from Player 1. Initializing board.\n");
         initialize_game_board(width, height);
         initialize_player_state(&player1_state);
         initialize_player_state(&player2_state);
-        send_response(conn_fd, "A"); // Send acknowledgment for a valid Begin packet
+        send_response(conn_fd, "A");
     } else if (player == 2) {
-        // Player 2 should only send "B" with no additional parameters
+        // Player 2 should only send "B" without any parameters
         if (strcmp(packet, "B") != 0) {
-            send_response(conn_fd, "E 200"); // Send error if Player 2's Begin packet is invalid
+            printf("[DEBUG] Invalid format for Begin packet from Player 2. Expected only 'B'.\n");
+            send_response(conn_fd, "E 200");
         } else {
-            send_response(conn_fd, "A"); // Send acknowledgment for a valid Player 2 Begin packet
+            printf("[DEBUG] Valid Begin packet from Player 2. Sending acknowledgment.\n");
+            send_response(conn_fd, "A");
         }
     }
 }
 
 void handle_init(int conn_fd, char *packet, int player) {
-    // Parse and validate the piece initialization packet
     int type, rotation, col, row;
     if (sscanf(packet + 2, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
         send_response(conn_fd, ERR_INVALID_INIT);
         return;
     }
-
-    // Ensure the piece fits within bounds and does not overlap with other pieces.
     if (col < 0 || col >= game_board.width || row < 0 || row >= game_board.height) {
         send_response(conn_fd, ERR_SHAPE_OUT_OF_RANGE);
         return;
     }
-
-    // Place the piece and mark cells on the board
     if (game_board.cells[row][col] == 1) {
         send_response(conn_fd, ERR_SHIP_OVERLAP);
         return;
     } else {
-        game_board.cells[row][col] = 1; // Marking part of the ship
+        game_board.cells[row][col] = 1;
     }
-    send_response(conn_fd, "A"); // Acknowledge successful placement
+    send_response(conn_fd, "A");
 }
 
 void handle_shoot(int conn_fd, char *packet, int player) {
