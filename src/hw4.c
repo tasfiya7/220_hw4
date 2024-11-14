@@ -188,19 +188,24 @@ void parse_packet(int conn_fd, char *buffer, int player) {
 void handle_begin(int conn_fd, char *packet, int player) {
     if (player == 1) {
         int width, height;
-        if (sscanf(packet + 2, "%d %d", &width, &height) != 2 || width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
-            send_response(conn_fd, ERR_INVALID_BEGIN);
+        
+        // Check for correct format and values in Player 1's Begin packet
+        if (sscanf(packet, "B %d %d", &width, &height) != 2 || width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
+            send_response(conn_fd, "E 200"); // Send error if parameters are invalid or out of range
             return;
         }
+        
+        // Initialize the game board and player states if parameters are valid
         initialize_game_board(width, height);
         initialize_player_state(&player1_state);
         initialize_player_state(&player2_state);
-        send_response(conn_fd, "A");
+        send_response(conn_fd, "A"); // Send acknowledgment for a valid Begin packet
     } else if (player == 2) {
-        if (strlen(packet) != 1) {
-            send_response(conn_fd, ERR_INVALID_BEGIN);
+        // Player 2 should only send "B" with no additional parameters
+        if (strcmp(packet, "B") != 0) {
+            send_response(conn_fd, "E 200"); // Send error if Player 2's Begin packet is invalid
         } else {
-            send_response(conn_fd, "A");
+            send_response(conn_fd, "A"); // Send acknowledgment for a valid Player 2 Begin packet
         }
     }
 }
