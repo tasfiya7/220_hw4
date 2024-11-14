@@ -177,22 +177,23 @@ void parse_packet(int conn_fd, char *buffer, int player) {
             break;
         case 'S':
         case 'Q':
-        case 'F':
             if (!game_initialized) {
                 send_response(conn_fd, ERR_EXPECTED_BEGIN); // Error if game isn't initialized yet
             } else if (packet_type == 'S') {
                 handle_shoot(conn_fd, buffer, player);
             } else if (packet_type == 'Q') {
                 handle_query(conn_fd, player);
-            } else if (packet_type == 'F') {
-                handle_forfeit(conn_fd, player);
             }
+            break;
+        case 'F': // Allow "Forfeit" packets even if the game isn't initialized
+            handle_forfeit(conn_fd, player);
             break;
         default:
             send_response(conn_fd, ERR_INVALID_PACKET_TYPE); // Unknown packet type
             break;
     }
 }
+
 
 void handle_begin(int conn_fd, char *packet, int player) {
     if (player == 1) {
@@ -219,6 +220,7 @@ void handle_begin(int conn_fd, char *packet, int player) {
         }
     }
 }
+
 
 void handle_init(int conn_fd, char *packet, int player) {
     int type, rotation, col, row;
