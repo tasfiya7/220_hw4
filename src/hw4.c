@@ -82,7 +82,7 @@ int main() {
     // Create and bind sockets for Player 1 and Player 2
     if ((server_fd1 = socket(AF_INET, SOCK_STREAM, 0)) == 0 ||
         (server_fd2 = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
-        perror("Socket failed");
+        perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
     setsockopt(server_fd1, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -112,11 +112,11 @@ int main() {
     printf("Player 1 and Player 2 connected.\n");
 
     // Main game loop to handle packets for each player
-    int current_turn = 1;
+    int current_turn = 1;  // Start with Player 1
     char buffer[BUFFER_SIZE] = {0};
     
+    // Continuous loop to process packets
     while (1) {
-        // Set the active connection based on the current turn
         int conn_fd = (current_turn == 1) ? conn1_fd : conn2_fd;
 
         // Clear buffer and read incoming packet
@@ -125,25 +125,30 @@ int main() {
 
         // Check for read error or client disconnect
         if (nbytes <= 0) {
-            perror("[Server] Read failed or client disconnected.");
-            break;
+            printf("[Server] Client %d disconnected or read error.\n", current_turn);
+            break;  // Exit loop if there’s an error or disconnection
         }
 
+        // Null-terminate the buffer to ensure it’s treated as a string
+        buffer[nbytes] = '\0';
+
         printf("[Server] Received packet from Player %d: %s\n", current_turn, buffer);
-        
-        // Parse and handle each packet
+
+        // Process each packet independently and respond accordingly
         parse_packet(conn_fd, buffer, current_turn);
 
-        // Move to next player for the next packet processing
+        // Switch turn to the other player for the next packet
         current_turn = (current_turn == 1) ? 2 : 1;
     }
 
+    // Cleanup after the loop ends
     close(conn1_fd);
     close(conn2_fd);
     close(server_fd1);
     close(server_fd2);
     return 0;
 }
+
 
 
 void setup_server() {
