@@ -13,10 +13,8 @@
 
 // Error Codes
 #define ERR_INVALID_BEGIN "E 200"
-#define ERR_INVALID_INIT "E 201"
-#define ERR_SHAPE_OUT_OF_RANGE "E 300"
-#define ERR_ROTATION_OUT_OF_RANGE "E 301"
-#define ERR_SHIP_OVERLAP "E 303"
+#define ERR_INVALID_PACKET_TYPE "E 100"
+#define ERR_EXPECTED_BEGIN "E 102"
 #define ERR_SHOOT_OUT_OF_BOUNDS "E 400"
 
 // Packet Types
@@ -42,6 +40,7 @@ typedef struct {
 // Global Variables
 GameBoard game_board;
 PlayerState player1_state, player2_state;
+int game_initialized = 0; // Tracks if the game has been successfully initialized
 
 int player1_fd, player2_fd, conn1_fd, conn2_fd;
 
@@ -120,7 +119,6 @@ int main() {
     return 0;
 }
 
-
 void setup_server() {
     struct sockaddr_in address1, address2;
     int opt = 1;
@@ -172,62 +170,52 @@ void accept_connections() {
 
 void parse_packet(int conn_fd, char *buffer, int player) {
     char packet_type = buffer[0];
+
     switch (packet_type) {
-        case PACKET_BEGIN:
+        case 'B':
             handle_begin(conn_fd, buffer, player);
             break;
-        case PACKET_INIT:
-            handle_init(conn_fd, buffer, player);
-            break;
-        case PACKET_SHOOT:
-            handle_shoot(conn_fd, buffer, player);
-            break;
-        case PACKET_QUERY:
-            handle_query(conn_fd, player);
-            break;
-        case PACKET_FORFEIT:
-            handle_forfeit(conn_fd, player);
+        case 'S':
+        case 'Q':
+        case 'F':
+            if (!game_initialized) {
+                send_response(conn_fd, ERR_EXPECTED_BEGIN); // Error if game isn't initialized yet
+            } else if (packet_type == 'S') {
+                handle_shoot(conn_fd, buffer, player);
+            } else if (packet_type == 'Q') {
+                handle_query(conn_fd, player);
+            } else if (packet_type == 'F') {
+                handle_forfeit(conn_fd, player);
+            }
             break;
         default:
-            send_response(conn_fd, "E 100");
+            send_response(conn_fd, ERR_INVALID_PACKET_TYPE); // Unknown packet type
             break;
     }
 }
 
 void handle_begin(int conn_fd, char *packet, int player) {
-    printf("[DEBUG] Entering handle_begin. Packet received: '%s'\n", packet);
-    
     if (player == 1) {
         int width, height;
 
-        // Check if the packet is in the correct format and has valid dimensions
-        if (sscanf(packet, "B %d %d", &width, &height) != 2) {
-            printf("[DEBUG] Invalid format for Begin packet from Player 1. Expected two integers after 'B'.\n");
-            send_response(conn_fd, "E 200");
+        // Check if the packet has the correct format and valid dimensions
+        if (sscanf(packet, "B %d %d", &width, &height) != 2 || width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
+            send_response(conn_fd, ERR_INVALID_BEGIN); // Invalid format or out of range
             return;
         }
 
-        // Validate width and height
-        if (width < MIN_BOARD_SIZE || height < MIN_BOARD_SIZE) {
-            printf("[DEBUG] Begin packet parameters out of range. Width: %d, Height: %d\n", width, height);
-            send_response(conn_fd, "E 200");
-            return;
-        }
-
-        // Initialize game board and player states if the packet is valid
-        printf("[DEBUG] Valid Begin packet from Player 1. Initializing board.\n");
+        // Valid "Begin" packet: Initialize game board and player states
         initialize_game_board(width, height);
         initialize_player_state(&player1_state);
         initialize_player_state(&player2_state);
-        send_response(conn_fd, "A");
+        game_initialized = 1; // Mark game as initialized
+        send_response(conn_fd, "A"); // Send acknowledgment
     } else if (player == 2) {
         // Player 2 should only send "B" without any parameters
         if (strcmp(packet, "B") != 0) {
-            printf("[DEBUG] Invalid format for Begin packet from Player 2. Expected only 'B'.\n");
-            send_response(conn_fd, "E 200");
+            send_response(conn_fd, ERR_INVALID_BEGIN); // Invalid format for Player 2
         } else {
-            printf("[DEBUG] Valid Begin packet from Player 2. Sending acknowledgment.\n");
-            send_response(conn_fd, "A");
+            send_response(conn_fd, "A"); // Acknowledge valid "Begin" packet for Player 2
         }
     }
 }
@@ -235,15 +223,15 @@ void handle_begin(int conn_fd, char *packet, int player) {
 void handle_init(int conn_fd, char *packet, int player) {
     int type, rotation, col, row;
     if (sscanf(packet + 2, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
-        send_response(conn_fd, ERR_INVALID_INIT);
+        send_response(conn_fd, ERR_INVALID_BEGIN);
         return;
     }
     if (col < 0 || col >= game_board.width || row < 0 || row >= game_board.height) {
-        send_response(conn_fd, ERR_SHAPE_OUT_OF_RANGE);
+        send_response(conn_fd, ERR_SHOOT_OUT_OF_BOUNDS);
         return;
     }
     if (game_board.cells[row][col] == 1) {
-        send_response(conn_fd, ERR_SHIP_OVERLAP);
+        send_response(conn_fd, ERR_INVALID_BEGIN);
         return;
     } else {
         game_board.cells[row][col] = 1;
@@ -258,7 +246,6 @@ void handle_shoot(int conn_fd, char *packet, int player) {
         send_response(conn_fd, ERR_SHOOT_OUT_OF_BOUNDS);
         return;
     }
-
     if (game_board.cells[row][col] == 1) {
         game_board.cells[row][col] = 2;
         opponent_state->hits++;
@@ -279,7 +266,6 @@ void handle_shoot(int conn_fd, char *packet, int player) {
 }
 
 void handle_query(int conn_fd, int player) {
-    // Generate query response showing history of hits and misses
     char response[BUFFER_SIZE];
     snprintf(response, BUFFER_SIZE, "G %d M 0 0 H 1 1", player == 1 ? player2_state.ships_remaining : player1_state.ships_remaining);
     send_response(conn_fd, response);
@@ -294,9 +280,5 @@ void handle_forfeit(int conn_fd, int player) {
 }
 
 void send_response(int conn_fd, const char *response) {
-    char buffer[BUFFER_SIZE];
-    snprintf(buffer, sizeof(buffer), "%s", response); 
-    send(conn_fd, buffer, strlen(buffer), 0);
+    send(conn_fd, response, strlen(response), 0);
 }
-
-
