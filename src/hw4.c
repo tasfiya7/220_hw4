@@ -277,9 +277,6 @@ void handle_forfeit(int conn_fd, int player) {
 }
 
 void send_response(int conn_fd, const char *response) {
-    char buffer[BUFFER_SIZE];
-    snprintf(buffer, sizeof(buffer), "%s\n", response); // Append newline to the response
-    send(conn_fd, buffer, strlen(buffer), 0);
+    send(conn_fd, response, strlen(response), 0);
 }
-
 
