@@ -179,27 +179,37 @@ int does_piece_fit(GameBoard *board, TetrisPiece piece) {
 }
 
 // Process Begin packet
-int process_begin_packet(char *packet, int player, int *width, int *height, int *player_ready) {
-    if (player == 1) {
-        int w, h;
-        if (sscanf(packet, "B %d %d", &w, &h) != 2 || w < 10 || h < 10) {
-            return 200; // Invalid Begin packet or dimensions
+int process_begin_packet(char *buffer, int player_num, int *width, int *height, int player_ready[]) {
+    if (player_num == 1) {
+        // Player 1 should send "B <width> <height>"
+        int parsed_count = sscanf(buffer, "B %d %d", width, height);
+        
+        // Check if exactly two integers were read and if dimensions are valid
+        if (parsed_count != 2 || *width < 10 || *height < 10) {
+            return 200; // Invalid Begin packet (invalid number of parameters or dimensions)
         }
-        *width = w;
-        *height = h;
-        player_ready[0] = 1; // Player 1 is ready
-        printf("[Server] Player 1 set board dimensions: %dx%d\n", w, h);
-    } else if (player == 2) {
-        if (strcmp(packet, "B") != 0) {
-            return 100; // Invalid packet type for Player 2
+        
+        // Check for extra characters after the two integers
+        char extra;
+        if (sscanf(buffer + 2 + snprintf(NULL, 0, "%d %d", *width, *height), " %c", &extra) == 1) {
+            return 200; // Extra unexpected characters found
         }
-        player_ready[1] = 1; // Player 2 is ready
-        printf("[Server] Player 2 joined the game.\n");
-    } else {
-        return 100; // Invalid packet type
+
+        // Mark Player 1 as ready after valid Begin packet
+        player_ready[0] = 1; 
+    } else if (player_num == 2) {
+        // Player 2 should only send "B" without parameters
+        if (strcmp(buffer, "B") != 0) {
+            return 200; // Invalid Begin packet (unexpected parameters for Player 2)
+        }
+        
+        // Mark Player 2 as ready after valid Begin packet
+        player_ready[1] = 1;
     }
+
     return 0; // Success
 }
+
 
 int is_piece_valid(GameBoard *board, TetrisPiece piece) {
     if (piece.type < 1 || piece.type > 7) {
