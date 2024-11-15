@@ -250,19 +250,26 @@ int is_piece_overlapping(PlayerState *player, TetrisPiece piece) {
 
 
 // Process Initialize packet
+
+
 int process_initialize_packet(GameBoard *board, PlayerState *player, char *packet) {
     int type, rotation, col, row;
+    int offset = 2; // Skip the "I " prefix in the packet
+    char buffer[BUFFER_SIZE];
+    strncpy(buffer, packet + offset, BUFFER_SIZE - offset);
+    buffer[BUFFER_SIZE - offset - 1] = '\0'; // Ensure null-termination
 
-    char *token = strtok(packet + 2, " ");
     for (int i = 0; i < 5; i++) {
-        if (!token || sscanf(token, "%d %d %d %d\n", &type, &rotation, &col, &row) != 4) {
+        if (sscanf(buffer, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
             return 201; // Invalid number of parameters
         }
 
         TetrisPiece piece = {type, rotation, col, row};
 
-        if (is_piece_valid(board, piece) != 0) {
-            return 300; // Specific validation error
+        // Validate the piece
+        int validation_error = is_piece_valid(board, piece);
+        if (validation_error != 0) {
+            return validation_error; // Specific validation error (300, 301, 302)
         }
 
         if (is_piece_overlapping(player, piece)) {
@@ -270,12 +277,21 @@ int process_initialize_packet(GameBoard *board, PlayerState *player, char *packe
         }
 
         player->pieces[i] = piece;
-        token = strtok(NULL, " ");
+
+        // Advance the buffer to the next set of inputs
+        char *remaining = strchr(buffer, ' ');
+        if (!remaining) {
+            return 201; // Not enough data for another piece
+        }
+
+        // Move to the next piece description
+        memmove(buffer, remaining + 1, strlen(remaining));
     }
 
     player->is_ready = 1;
     return 0; // Success
 }
+
 
 int process_shoot_packet(GameBoard *board, PlayerState *target, char *packet, char *response) {
     int row, col;
