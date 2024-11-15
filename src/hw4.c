@@ -162,6 +162,21 @@ void process_forfeit_packet(int forfeiting_player, int client_fd1, int client_fd
     exit(0); // Terminate server
 }
 
+int does_piece_fit(GameBoard *board, TetrisPiece piece) {
+    int (*offsets)[2] = shape_offsets[piece.type - 1][piece.rotation - 1];
+
+    for (int i = 0; i < 4; i++) {
+        int cell_row = piece.row + offsets[i][0];
+        int cell_col = piece.column + offsets[i][1];
+
+        if (cell_row < 0 || cell_row >= board->height || 
+            cell_col < 0 || cell_col >= board->width) {
+            return 0; // Cell is outside the board boundaries
+        }
+    }
+
+    return 1; // All cells fit within the board
+}
 
 // Process Begin packet
 int process_begin_packet(char *packet, int player, int *width, int *height, int *player_ready) {
@@ -201,32 +216,6 @@ int is_piece_valid(GameBoard *board, TetrisPiece piece) {
     return 0; // Valid piece
 }
 
-int does_piece_fit(GameBoard *board, TetrisPiece piece) {
-    int (*offsets)[2] = shape_offsets[piece.type - 1][piece.rotation - 1];
-
-    for (int i = 0; i < 4; i++) {
-        int cell_row = piece.row + offsets[i][0];
-        int cell_col = piece.column + offsets[i][1];
-
-        if (cell_row < 0 || cell_row >= board->height || 
-            cell_col < 0 || cell_col >= board->width) {
-            return 0; // Cell is outside the board boundaries
-        }
-    }
-
-    return 1; // All cells fit within the board
-}
-
-
-int is_piece_overlapping(PlayerState *player, TetrisPiece piece) {
-    for (int i = 0; i < 5; i++) {
-        if (player->pieces[i].type != 0 && do_pieces_overlap(player->pieces[i], piece)) {
-            return 1; // Overlap found
-        }
-    }
-    return 0; // No overlap
-}
-
 int do_pieces_overlap(TetrisPiece existing_piece, TetrisPiece new_piece) {
     int (*existing_offsets)[2] = shape_offsets[existing_piece.type - 1][existing_piece.rotation - 1];
     int (*new_offsets)[2] = shape_offsets[new_piece.type - 1][new_piece.rotation - 1];
@@ -247,6 +236,16 @@ int do_pieces_overlap(TetrisPiece existing_piece, TetrisPiece new_piece) {
 
     return 0; // No overlap
 }
+
+int is_piece_overlapping(PlayerState *player, TetrisPiece piece) {
+    for (int i = 0; i < 5; i++) {
+        if (player->pieces[i].type != 0 && do_pieces_overlap(player->pieces[i], piece)) {
+            return 1; // Overlap found
+        }
+    }
+    return 0; // No overlap
+}
+
 
 
 
@@ -278,6 +277,73 @@ int process_initialize_packet(GameBoard *board, PlayerState *player, char *packe
     return 0; // Success
 }
 
+int process_shoot_packet(GameBoard *board, PlayerState *target, char *packet, char *response) {
+    int row, col;
+
+    if (sscanf(packet + 2, "%d %d", &row, &col) != 2) {
+        return 202; // Invalid number of parameters
+    }
+
+    if (row < 0 || row >= board->height || col < 0 || col >= board->width) {
+        return 400; // Cell not in game board
+    }
+
+    if (target->hits[row][col] != 'E') {
+        return 401; // Cell already guessed
+    }
+
+    if (board->grid[row][col] == 'S') { // Hit
+        target->hits[row][col] = 'H';
+        board->grid[row][col] = 'H';
+
+        for (int i = 0; i < 5; i++) {
+            TetrisPiece piece = target->pieces[i];
+            if (piece.type == 0) continue;
+
+            int (*offsets)[2] = shape_offsets[piece.type - 1][piece.rotation - 1];
+
+            int piece_cells = 0, hit_cells = 0;
+            for (int j = 0; j < 4; j++) {
+                int pr = piece.row + offsets[j][0];
+                int pc = piece.column + offsets[j][1];
+
+                if (pr >= 0 && pr < board->height && pc >= 0 && pc < board->width) {
+                    piece_cells++;
+                    if (target->hits[pr][pc] == 'H') hit_cells++;
+                }
+            }
+            if (piece_cells == hit_cells) {
+                target->pieces[i].type = 0; // Mark ship as sunk
+                target->ships_remaining--;
+            }
+        }
+
+        snprintf(response, BUFFER_SIZE, "R %d H", target->ships_remaining);
+    } else {
+        target->hits[row][col] = 'M';
+        board->grid[row][col] = 'M';
+        snprintf(response, BUFFER_SIZE, "R %d M", target->ships_remaining);
+    }
+
+    return 0; // Success
+}
+
+void process_query_packet(PlayerState *player, char *response) {
+    char history[BUFFER_SIZE] = "";
+    snprintf(response, BUFFER_SIZE, "G %d ", player->ships_remaining);
+
+    for (int r = 0; r < *(player->hits[0]); r++) {
+        for (int c = 0; c < *(player->hits[0]); c++) {
+            if (player->hits[r][c] != 'E') {
+                char cell[16];
+                snprintf(cell, sizeof(cell), "%c %d %d ", player->hits[r][c], c, r);
+                strcat(history, cell);
+            }
+        }
+    }
+
+    strcat(response, history);
+}
 
 int main() {
     int server_fd1, server_fd2, client_fd1, client_fd2;
@@ -465,71 +531,7 @@ int main() {
 
 
 
-int process_shoot_packet(GameBoard *board, PlayerState *target, char *packet, char *response) {
-    int row, col;
 
-    if (sscanf(packet + 2, "%d %d", &row, &col) != 2) {
-        return 202; // Invalid number of parameters
-    }
 
-    if (row < 0 || row >= board->height || col < 0 || col >= board->width) {
-        return 400; // Cell not in game board
-    }
 
-    if (target->hits[row][col] != 'E') {
-        return 401; // Cell already guessed
-    }
-
-    if (board->grid[row][col] == 'S') { // Hit
-        target->hits[row][col] = 'H';
-        board->grid[row][col] = 'H';
-
-        for (int i = 0; i < 5; i++) {
-            TetrisPiece piece = target->pieces[i];
-            if (piece.type == 0) continue;
-
-            int (*offsets)[2] = shape_offsets[piece.type - 1][piece.rotation - 1];
-
-            int piece_cells = 0, hit_cells = 0;
-            for (int j = 0; j < 4; j++) {
-                int pr = piece.row + offsets[j][0];
-                int pc = piece.column + offsets[j][1];
-
-                if (pr >= 0 && pr < board->height && pc >= 0 && pc < board->width) {
-                    piece_cells++;
-                    if (target->hits[pr][pc] == 'H') hit_cells++;
-                }
-            }
-            if (piece_cells == hit_cells) {
-                target->pieces[i].type = 0; // Mark ship as sunk
-                target->ships_remaining--;
-            }
-        }
-
-        snprintf(response, BUFFER_SIZE, "R %d H", target->ships_remaining);
-    } else {
-        target->hits[row][col] = 'M';
-        board->grid[row][col] = 'M';
-        snprintf(response, BUFFER_SIZE, "R %d M", target->ships_remaining);
-    }
-
-    return 0; // Success
-}
-
-void process_query_packet(PlayerState *player, char *response) {
-    char history[BUFFER_SIZE] = "";
-    snprintf(response, BUFFER_SIZE, "G %d ", player->ships_remaining);
-
-    for (int r = 0; r < player->hits[0]; r++) {
-        for (int c = 0; c < player->hits[0]; c++) {
-            if (player->hits[r][c] != 'E') {
-                char cell[16];
-                snprintf(cell, sizeof(cell), "%c %d %d ", player->hits[r][c], c, r);
-                strcat(history, cell);
-            }
-        }
-    }
-
-    strcat(response, history);
-}
 
