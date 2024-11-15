@@ -255,7 +255,7 @@ int process_initialize_packet(GameBoard *board, PlayerState *player, char *packe
 
     char *token = strtok(packet + 2, " ");
     for (int i = 0; i < 5; i++) {
-        if (!token || sscanf(token, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
+        if (!token || sscanf(token, "%d %d %d %d\n", &type, &rotation, &col, &row) != 4) {
             return 201; // Invalid number of parameters
         }
 
