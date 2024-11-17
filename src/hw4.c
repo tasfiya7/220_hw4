@@ -9,6 +9,13 @@
 #define PORT2 2202
 #define BUFFER_SIZE 1024
 
+// Define the phases of the game
+typedef enum {
+    PHASE_BEGIN,
+    PHASE_INITIALIZE,
+    PHASE_GAMEPLAY
+} PlayerPhase;
+
 // shape_offsets[type][rotation][cell][row/col]
 int shape_offsets[7][4][4][2] = {
     // Type 1: Square piece
@@ -129,16 +136,20 @@ void free_player_state(PlayerState *player, int height) {
 }
 
 // Function to send error response
-void send_error(int client_fd, int error_code) {
-    char error_msg[BUFFER_SIZE];
-    snprintf(error_msg, BUFFER_SIZE, "E %d", error_code);
-    send(client_fd, error_msg, strlen(error_msg), 0);
+void send_error(int client_fd, int error_code, int player_num) {
+    char error_message[BUFFER_SIZE];
+    snprintf(error_message, BUFFER_SIZE, "E %d", error_code);
+    send(client_fd, error_message, strlen(error_message), 0);
+    printf("[Server] Sent to Player %d: E %d.\n", player_num, error_code);
 }
 
+
 // Function to send acknowledgment
-void send_acknowledgment(int client_fd) {
+void send_acknowledgment(int client_fd, int player_num) {
     send(client_fd, "A", strlen("A"), 0);
+    printf("[Server] Sent acknowledgment to Player %d.\n", player_num);
 }
+
 
 // Function to process Forfeit packet
 void process_forfeit_packet(int forfeiting_player, int client_fd1, int client_fd2, GameBoard *board, PlayerState *player1, PlayerState *player2) {
@@ -423,130 +434,90 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
+
+    PlayerPhase player1_phase = PHASE_BEGIN;
+    PlayerPhase player2_phase = PHASE_BEGIN;
+
     printf("[Server] Both players connected. Starting game setup...\n");
 
-    // **Begin Phase**
-    while (!player_ready[0] || !player_ready[1]) {
-        if (!player_ready[0]) {
-            memset(buffer, 0, BUFFER_SIZE);
-            read(client_fd1, buffer, BUFFER_SIZE);
-            printf("[Player 1] Sent: %s\n", buffer);
-
-            if (strncmp(buffer, "B", 1) == 0) {
-                int error = process_begin_packet(buffer, 1, &width, &height, player_ready);
-                if (error) {
-                    send_error(client_fd1, error);
-                } else {
-                    send_acknowledgment(client_fd1);
-                }
-            } else {
-                send_error(client_fd1, 100); // Invalid packet type
-            }
-        }
-
-        if (!player_ready[1]) {
-            memset(buffer, 0, BUFFER_SIZE);
-            read(client_fd2, buffer, BUFFER_SIZE);
-            printf("[Player 2] Sent: %s\n", buffer);
-
-            if (strncmp(buffer, "B", 1) == 0) {
-                int error = process_begin_packet(buffer, 2, &width, &height, player_ready);
-                if (error) {
-                    send_error(client_fd2, error);
-                } else {
-                    send_acknowledgment(client_fd2);
-                }
-            } else {
-                send_error(client_fd2, 100); // Invalid packet type
-            }
-        }
-    }
-
-    printf("[Server] Both players successfully sent Begin packets. Board dimensions: %dx%d\n", width, height);
-
     // Initialize game board and player states
-    GameBoard *game_board = initialize_board(width, height);
-    PlayerState *player1 = initialize_player_state(width, height);
-    PlayerState *player2 = initialize_player_state(width, height);
+    GameBoard *game_board = NULL;
+    PlayerState *player1 = NULL;
+    PlayerState *player2 = NULL;
 
-    printf("[Server] Both players ready for initialization phase...\n");
-
-    // **Initialize Phase**
-    for (int i = 0; i < 2; i++) {
-        int client_fd = (i == 0) ? client_fd1 : client_fd2;
-        PlayerState *player = (i == 0) ? player1 : player2;
-
-        while (!player->is_ready) {
-            memset(buffer, 0, BUFFER_SIZE);
-            read(client_fd, buffer, BUFFER_SIZE);
-            printf("[Player %d] Sent: %s\n", i + 1, buffer);
-
-            if (strncmp(buffer, "I", 1) == 0) { // Initialize packet
-                int error = process_initialize_packet(game_board, player, buffer);
-                if (error) {
-                    send_error(client_fd, error);
-                } else {
-                    send_acknowledgment(client_fd);
-                }
-            } else if (strncmp(buffer, "F", 1) == 0) { // Forfeit packet
-                process_forfeit_packet(i + 1, client_fd1, client_fd2, game_board, player1, player2);
-            } else {
-                send_error(client_fd, 101); // Invalid packet type
-            }
-        }
-    }
-
-    printf("[Server] Both players successfully initialized their pieces. Game starting...\n");
-
-    // **Gameplay Phase**
+    
+    // Main gameplay loop
     while (1) {
         for (int i = 0; i < 2; i++) {
             int client_fd = (i == 0) ? client_fd1 : client_fd2;
             PlayerState *opponent = (i == 0) ? player2 : player1;
+            PlayerPhase *current_phase = (i == 0) ? &player1_phase : &player2_phase;
 
             memset(buffer, 0, BUFFER_SIZE);
             read(client_fd, buffer, BUFFER_SIZE);
             printf("[Player %d] Sent: %s\n", i + 1, buffer);
 
-            if (strncmp(buffer, "S", 1) == 0) { // Shoot packet
-                char response[BUFFER_SIZE];
-                int error = process_shoot_packet(game_board, opponent, buffer, response);
-                if (error) {
-                    send_error(client_fd, error);
-                } else {
-                    send(client_fd, response, strlen(response), 0);
-
-                    // Check if the game is over
-                    if (opponent->ships_remaining == 0) {
-                        send(client_fd, "H 1", strlen("H 1"), 0); // Winner
-                        send((i == 0) ? client_fd2 : client_fd1, "H 0", strlen("H 0"), 0); // Loser
-                        free_board(game_board);
-                        free_player_state(player1, height);
-                        free_player_state(player2, height);
-                        close(client_fd1);
-                        close(client_fd2);
-                        close(server_fd1);
-                        close(server_fd2);
-                        return 0;
-                    }
-                }
-            } else if (strncmp(buffer, "Q", 1) == 0) { // Query packet
-                char response[BUFFER_SIZE];
-                process_query_packet(opponent, response);
-                send(client_fd, response, strlen(response), 0);
-            } else if (strncmp(buffer, "F", 1) == 0) { // Forfeit packet
+            // Handle Forfeit packet first, regardless of phase
+            if (strncmp(buffer, "F", 1) == 0) {
                 process_forfeit_packet(i + 1, client_fd1, client_fd2, game_board, player1, player2);
-            } else {
-                send_error(client_fd, 102); // Invalid packet type
+                return 0; // Exit the loop and terminate the server after processing Forfeit
+            }
+
+            // Handle other packets based on the current phase
+            if (*current_phase == PHASE_BEGIN) {
+                if (strncmp(buffer, "B", 1) == 0) {
+                    int error = process_begin_packet(buffer, i + 1, &width, &height, player_ready);
+                    if (error) {
+                        send_error(client_fd, error, i + 1);
+                    } else {
+                        send_acknowledgment(client_fd, i + 1);
+                        if (player_ready[0] && player_ready[1]) {
+                            *current_phase = PHASE_INITIALIZE;
+                            game_board = initialize_board(width, height);
+                            player1 = initialize_player_state(width, height);
+                            player2 = initialize_player_state(width, height);
+                        }
+                    }
+                } else {
+                    send_error(client_fd, 100, i + 1); // Invalid packet type
+                }
+            } else if (*current_phase == PHASE_INITIALIZE) {
+                if (strncmp(buffer, "I", 1) == 0) {
+                    int error = process_initialize_packet(game_board, opponent, buffer);
+                    if (error) {
+                        send_error(client_fd, error, i + 1);
+                    } else {
+                        send_acknowledgment(client_fd, i + 1);
+                        *current_phase = PHASE_GAMEPLAY;
+                    }
+                } else {
+                    send_error(client_fd, 101, i + 1); // Invalid packet type
+                }
+            } else if (*current_phase == PHASE_GAMEPLAY) {
+                if (strncmp(buffer, "S", 1) == 0) {
+                    char response[BUFFER_SIZE];
+                    int error = process_shoot_packet(game_board, opponent, buffer, response);
+                    if (error) {
+                        send_error(client_fd, error, i + 1);
+                    } else {
+                        send(client_fd, response, strlen(response), 0);
+                    }
+                } else if (strncmp(buffer, "Q", 1) == 0) {
+                    char response[BUFFER_SIZE];
+                    process_query_packet(opponent, response);
+                    send(client_fd, response, strlen(response), 0);
+                } else {
+                    send_error(client_fd, 102, i + 1); // Invalid packet type
+                }
             }
         }
     }
 
     // Cleanup resources
     printf("[Server] Cleaning up resources and shutting down...\n");
-    free_board(game_board);
-    free_player_state(player1, height);
-    free_player_state(player2, height);
+    if (game_board) free_board(game_board);
+    if (player1) free_player_state(player1, height);
+    if (player2) free_player_state(player2, height);
     close(client_fd1);
     close(client_fd2);
     close(server_fd1);
