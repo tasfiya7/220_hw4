@@ -550,40 +550,51 @@ int main() {
 
             // Handle other packets based on the current phase
             if (*current_phase == PHASE_BEGIN) {
-                if (strncmp(buffer, "B", 1) == 0) {
-                    int error = process_begin_packet(buffer, i + 1, &width, &height, player_ready);
-                    if (error) {
-                        send_error(client_fd, error, i + 1);
-                    } else {
-                        send_acknowledgment(client_fd, i + 1);
-                        if (player_ready[0] && player_ready[1]) {
-                            printf("[Server] Transitioning both players to PHASE_INITIALIZE.\n");
-                            player1_phase = PHASE_INITIALIZE;
-                            player2_phase = PHASE_INITIALIZE;
-                            game_board = initialize_board(width, height);
-                            player1 = initialize_player_state(width, height);
-                            player2 = initialize_player_state(width, height);
-                        }
-                    }
-                } else {
-                    send_error(client_fd, 100, i + 1); // Invalid packet type
+                if (i == 1 && !player_ready[0]) {
+                    send_error(client_fd, 100, 2); // Player 1 must be ready before Player 2
+                    continue;
+            }
+
+            if (strncmp(buffer, "B", 1) == 0) {
+                int error = process_begin_packet(buffer, i + 1, &width, &height, player_ready);
+            if (error) {
+                send_error(client_fd, error, i + 1);
+            } else {
+            send_acknowledgment(client_fd, i + 1);
+            if (player_ready[0] && player_ready[1]) {
+                printf("[Server] Transitioning both players to PHASE_INITIALIZE.\n");
+                player1_phase = PHASE_INITIALIZE;
+                player2_phase = PHASE_INITIALIZE;
+                game_board = initialize_board(width, height);
+                player1 = initialize_player_state(width, height);
+                player2 = initialize_player_state(width, height);
+            }
+            }
+            } else {
+                send_error(client_fd, 100, i + 1); // Invalid packet type
+            }
+            }
+            else if (*current_phase == PHASE_INITIALIZE) {
+                if (i == 1 && !player1->is_ready) {
+                    send_error(client_fd, 101, 2); // Player 1 must initialize first
+                    continue;
                 }
-            } else if (*current_phase == PHASE_INITIALIZE) {
-                if (strncmp(buffer, "I", 1) == 0) {
-                    int error = process_initialize_packet(game_board, opponent, buffer);
-                    if (error) {
-                        send_error(client_fd, error, i + 1);
-                    } else {
-                        send_acknowledgment(client_fd, i + 1);
-                        if (player1->is_ready && player2->is_ready) {
-                        printf("[Server] Transitioning both players to PHASE_GAMEPLAY.\n");
-                        player1_phase = PHASE_GAMEPLAY;
-                        player2_phase = PHASE_GAMEPLAY;
-                        }
-                    }
-             } else {
-                    send_error(client_fd, 101, i + 1); // Invalid packet type
+
+            if (strncmp(buffer, "I", 1) == 0) {
+            int error = process_initialize_packet(game_board, (i == 0) ? player1 : player2, buffer);
+            if (error) {
+                send_error(client_fd, error, i + 1);
+            } else {
+                send_acknowledgment(client_fd, i + 1);
+                if (player1->is_ready && player2->is_ready) {
+                    printf("[Server] Transitioning both players to PHASE_GAMEPLAY.\n");
+                    player1_phase = PHASE_GAMEPLAY;
+                    player2_phase = PHASE_GAMEPLAY;
                 }
+            }
+            } else {
+                send_error(client_fd, 101, i + 1); // Invalid packet type
+            }
             } else if (*current_phase == PHASE_GAMEPLAY) {
                 if (strncmp(buffer, "S", 1) == 0) {
                     char response[BUFFER_SIZE];
