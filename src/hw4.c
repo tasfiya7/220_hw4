@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <ctype.h>
 
 #define PORT1 2201
 #define PORT2 2202
@@ -119,20 +120,27 @@ PlayerState *initialize_player_state(int width, int height) {
 
 // Free the game board
 void free_board(GameBoard *board) {
+    if (!board) {
+        printf("[Debug] Attempted to free null game_board.\n");
+        return;
+    }
     for (int i = 0; i < board->height; i++) {
-        free(board->grid[i]);
+        if (board->grid[i]) {
+            free(board->grid[i]);
+        }
     }
     free(board->grid);
     free(board);
+    printf("[Debug] Game board freed.\n");
 }
 
-// Free the player state
 void free_player_state(PlayerState *player, int height) {
-    for (int i = 0; i < height; i++) {
-        free(player->hits[i]);
+    if (!player) {
+        printf("[Debug] Attempted to free null player.\n");
+        return;
     }
-    free(player->hits);
     free(player);
+    printf("[Debug] Player state freed.\n");
 }
 
 // Function to send error response
@@ -152,7 +160,7 @@ void send_acknowledgment(int client_fd, int player_num) {
 
 
 // Function to process Forfeit packet
-void process_forfeit_packet(int forfeiting_player, int client_fd1, int client_fd2, GameBoard *board, PlayerState *player1, PlayerState *player2) {
+void process_forfeit_packet(int forfeiting_player, int client_fd1, int client_fd2, GameBoard *game_board, PlayerState *player1, PlayerState *player2) {
     if (forfeiting_player == 1) {
         send(client_fd1, "H 0", strlen("H 0"), 0); // Player 1 loses
         send(client_fd2, "H 1", strlen("H 1"), 0); // Player 2 wins
@@ -164,12 +172,32 @@ void process_forfeit_packet(int forfeiting_player, int client_fd1, int client_fd
     }
 
     // Clean up resources
-    if (board) free_board(board);
-    if (player1) free_player_state(player1, board->height);
-    if (player2) free_player_state(player2, board->height);
+    if (game_board) {
+        printf("[Debug] Freeing game_board...\n");
+        free_board(game_board);
+    }
 
-    close(client_fd1);
-    close(client_fd2);
+    if (player1) {
+        printf("[Debug] Freeing player1...\n");
+        free_player_state(player1, game_board ? game_board->height : 0);
+    }
+
+    if (player2) {
+        printf("[Debug] Freeing player2...\n");
+        free_player_state(player2, game_board ? game_board->height : 0);
+    }
+
+    // Close socket connections
+    if (client_fd1 > 0) {
+        printf("[Debug] Closing client_fd1...\n");
+        close(client_fd1);
+    }
+    if (client_fd2 > 0) {
+        printf("[Debug] Closing client_fd2...\n");
+        close(client_fd2);
+    }
+
+    printf("[Debug] Cleanup complete. Exiting.\n");
     exit(0); // Terminate server
 }
 
@@ -221,20 +249,35 @@ int process_begin_packet(char *buffer, int player_num, int *width, int *height, 
     return 0; // Success
 }
 
+void trim_input(char *input) {
+    char *end = input + strlen(input) - 1;
+    while (end > input && isspace((unsigned char)*end)) {
+        *end-- = '\0';
+    }
+}
+
 
 int is_piece_valid(GameBoard *board, TetrisPiece piece) {
+    // Check if the piece type is valid
     if (piece.type < 1 || piece.type > 7) {
+        printf("[Debug] Invalid type: %d\n", piece.type);
         return 300; // Invalid piece type
     }
+
+    // Check if the rotation is valid
     if (piece.rotation < 1 || piece.rotation > 4) {
+        printf("[Debug] Invalid rotation: %d\n", piece.rotation);
         return 301; // Invalid rotation
     }
 
+    // Check if the piece fits in the game board
     if (!does_piece_fit(board, piece)) {
-        return 302; // Piece doesn't fit in the game board
+        printf("[Debug] Piece doesn't fit: type=%d, rotation=%d, col=%d, row=%d\n",
+               piece.type, piece.rotation, piece.column, piece.row);
+        return 302; // Doesn't fit in the game board
     }
 
-    return 0; // Valid piece
+    return 0; // Piece is valid
 }
 
 int do_pieces_overlap(TetrisPiece existing_piece, TetrisPiece new_piece) {
@@ -275,44 +318,86 @@ int is_piece_overlapping(PlayerState *player, TetrisPiece piece) {
 
 int process_initialize_packet(GameBoard *board, PlayerState *player, char *packet) {
     int type, rotation, col, row;
-    int offset = 2; // Skip the "I " prefix in the packet
-    char buffer[BUFFER_SIZE];
-    strncpy(buffer, packet + offset, BUFFER_SIZE - offset);
-    buffer[BUFFER_SIZE - offset - 1] = '\0'; // Ensure null-termination
 
+    // Trim any trailing spaces or newlines from the packet
+    trim_input(packet);
+
+    // Ensure the packet starts with "I "
+    if (strncmp(packet, "I ", 2) != 0) {
+        printf("[Debug] Packet does not start with 'I ': %s\n", packet);
+        return 201; // Invalid packet format
+    }
+
+    // Count the total number of values in the packet
+    int count = 0;
+    char *temp = packet + 2; // Skip "I " prefix
+    while (*temp) {
+        if (*temp == ' ') count++;
+        temp++;
+    }
+    count++; // Add 1 to count the last value
+
+    // Check if there are exactly 20 values
+    if (count != 20) {
+        printf("[Debug] Invalid number of values in packet: %d (expected 20)\n", count);
+        return 201; // Invalid number of parameters
+    }
+
+    char *cursor = packet + 2; // Skip the "I " prefix
     for (int i = 0; i < 5; i++) {
-        if (sscanf(buffer, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
+        // Parse the type, rotation, column, and row
+        if (sscanf(cursor, "%d %d %d %d", &type, &rotation, &col, &row) != 4) {
+            printf("[Debug] Parsing failed for piece %d: %s\n", i + 1, cursor);
             return 201; // Invalid number of parameters
         }
 
-        TetrisPiece piece = {type, rotation, col, row};
+        printf("[Debug] Parsed: type=%d, rotation=%d, col=%d, row=%d\n", type, rotation, col, row);
 
-        // Validate the piece
-        int validation_error = is_piece_valid(board, piece);
-        if (validation_error != 0) {
-            return validation_error; // Specific validation error (300, 301, 302)
+        TetrisPiece piece = {type, rotation, col, row};
+    int flag = 1;
+        // Validate the piece type and rotation first
+        if (piece.type < 1 || piece.type > 7) {
+            printf("[Debug] Invalid type: %d\n", piece.type);
+            printf("Flag is 0, dont need to check for overlap");
+            flag=0;
+            return 300; // Invalid piece type
+        }
+        if (piece.rotation < 1 || piece.rotation > 4) {
+            printf("[Debug] Invalid rotation: %d\n", piece.rotation);
+            flag =0;
+            return 301; // Invalid rotation
         }
 
-        if (is_piece_overlapping(player, piece)) {
+        // Check if the piece fits on the board
+        if (!does_piece_fit(board, piece)) {
+            printf("[Debug] Piece does not fit on the board for piece %d\n", i + 1);
+            flag = 0;           
+            return 302; // Piece doesn't fit in the game board
+        }
+
+        // Check for overlap only after passing the above validations
+        if (flag==1 && is_piece_overlapping(player, piece)) {
+            printf("Flag is set to true. Can check for overlap now.");
+            printf("[Debug] Overlap detected for piece %d\n", i + 1);
             return 303; // Pieces overlap
         }
 
+        // Save the piece to the player's state
         player->pieces[i] = piece;
 
-        // Advance the buffer to the next set of inputs
-        char *remaining = strchr(buffer, ' ');
-        if (!remaining) {
-            return 201; // Not enough data for another piece
+        // Move the cursor to the next piece description
+        for (int j = 0; j < 4; j++) { // Skip 4 values (type, rotation, col, row)
+            char *next = strchr(cursor, ' ');
+            if (!next) {
+                return (i == 4) ? 0 : 201; // Success if on last piece, error otherwise
+            }
+            cursor = next + 1; // Move past the space
         }
-
-        // Move to the next piece description
-        memmove(buffer, remaining + 1, strlen(remaining));
     }
 
     player->is_ready = 1;
     return 0; // Success
 }
-
 
 int process_shoot_packet(GameBoard *board, PlayerState *target, char *packet, char *response) {
     int row, col;
@@ -490,9 +575,13 @@ int main() {
                         send_error(client_fd, error, i + 1);
                     } else {
                         send_acknowledgment(client_fd, i + 1);
-                        *current_phase = PHASE_GAMEPLAY;
+                        if (player1->is_ready && player2->is_ready) {
+                        printf("[Server] Transitioning both players to PHASE_GAMEPLAY.\n");
+                        player1_phase = PHASE_GAMEPLAY;
+                        player2_phase = PHASE_GAMEPLAY;
+                        }
                     }
-                } else {
+             } else {
                     send_error(client_fd, 101, i + 1); // Invalid packet type
                 }
             } else if (*current_phase == PHASE_GAMEPLAY) {
