@@ -472,7 +472,9 @@ int main() {
                     } else {
                         send_acknowledgment(client_fd, i + 1);
                         if (player_ready[0] && player_ready[1]) {
-                            *current_phase = PHASE_INITIALIZE;
+                            printf("[Server] Transitioning both players to PHASE_INITIALIZE.\n");
+                            player1_phase = PHASE_INITIALIZE;
+                            player2_phase = PHASE_INITIALIZE;
                             game_board = initialize_board(width, height);
                             player1 = initialize_player_state(width, height);
                             player2 = initialize_player_state(width, height);
